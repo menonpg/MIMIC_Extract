@@ -512,7 +512,7 @@ def save_outcome(
         new_data = new_data.apply(add_outcome_indicators)
         new_data.rename(columns = {'on':task}, inplace=True)
         new_data = new_data.reset_index()
-        new_data.to_csv('new_task.csv')
+        new_data.to_csv(os.path.join(outPath,'new_task.csv'))
         Y = Y.merge(
             new_data[['subject_id', 'hadm_id', 'icustay_id', 'hours_in', task]],
             on=['subject_id', 'hadm_id', 'icustay_id', 'hours_in'],
