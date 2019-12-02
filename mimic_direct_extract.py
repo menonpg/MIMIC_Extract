@@ -13,7 +13,8 @@ import time
 from os import environ
 from os.path import isfile, isdir, splitext
 import argparse
-import cPickle
+try:import cPickle as pickle
+except:import pickle
 import numpy as np
 import numpy.random as npr
 
@@ -173,9 +174,13 @@ def save_pop(
 # From Dave's approach!
 def get_variable_mapping(mimic_mapping_filename):
     # Read in the second level mapping of the itemids
-    var_map = DataFrame.from_csv(mimic_mapping_filename, index_col=None).fillna('').astype(str)
-    var_map = var_map.ix[(var_map['LEVEL2'] != '') & (var_map.COUNT>0)]
-    var_map = var_map.ix[(var_map.STATUS == 'ready')]
+    var_map = pd.read_csv(mimic_mapping_filename, index_col=None).fillna('').astype(str)
+    try:
+        var_map = var_map.loc[(var_map['LEVEL2'] != '') & (var_map.COUNT.astype(float)>0)]
+    except:
+        # python3/updated pandas with additional req's
+        var_map = var_map.loc[(var_map['LEVEL2'] != '') & (pd.to_numeric(var_map.COUNT, errors='coerce')>0)]
+    var_map = var_map.loc[(var_map.STATUS == 'ready')] # ix depricated?
     var_map.ITEMID = var_map.ITEMID.astype(int)
 
     return var_map
@@ -185,13 +190,13 @@ def get_variable_ranges(range_filename):
     columns = [ 'LEVEL2', 'OUTLIER LOW', 'VALID LOW', 'IMPUTE', 'VALID HIGH', 'OUTLIER HIGH' ]
     to_rename = dict(zip(columns, [ c.replace(' ', '_') for c in columns ]))
     to_rename['LEVEL2'] = 'VARIABLE'
-    var_ranges = DataFrame.from_csv(range_filename, index_col=None)
+    var_ranges = pd.read_csv(range_filename, index_col=None)
     var_ranges = var_ranges[columns]
     var_ranges.rename_axis(to_rename, axis=1, inplace=True)
     var_ranges = var_ranges.drop_duplicates(subset='VARIABLE', keep='first')
     var_ranges['VARIABLE'] = map(str.lower, var_ranges['VARIABLE'])
     var_ranges.set_index('VARIABLE', inplace=True)
-    var_ranges = var_ranges.ix[var_ranges.notnull().all(axis=1)]
+    var_ranges = var_ranges.loc[var_ranges.notnull().all(axis=1)]
 
     return var_ranges
 
@@ -319,7 +324,7 @@ def save_numerics(
 
     X = X.sort_index(axis=0).sort_index(axis=1)
 
-    print "Shape of X : ", X.shape
+    print("Shape of X : ", X.shape)
 
     # Turn back into columns
     if columns_filename is not None:
@@ -461,7 +466,7 @@ def save_outcome(
         # c may not be in Y if we are only extracting a subset of the population, in which c was never
         # performed.
         if not c in new_data:
-            print "Column ", c, " not in data."
+            print("Column ", c, " not in data.")
             continue
 
         Y = Y.merge(
@@ -475,7 +480,7 @@ def save_outcome(
         Y[c] = Y[c].astype(int)
         #Y = Y.sort_values(['subject_id', 'icustay_id', 'hours_in']) #.merge(df3,on='name')
         Y = Y.reset_index(drop=True)
-        print 'Extracted ' + c + ' from ' + t
+        print('Extracted ' + c + ' from ' + t)
 
 
     tasks=["colloid_bolus", "crystalloid_bolus", "nivdurations"]
@@ -518,7 +523,7 @@ def save_outcome(
         Y.fillna(0, inplace=True)
         Y[task] = Y[task].astype(int)
         Y = Y.reset_index(drop=True)
-        print 'Extracted ' + task
+        print('Extracted ' + task)
     
 
     # TODO: ADD THE RBC/PLT/PLASMA DATA
@@ -538,7 +543,7 @@ def save_outcome(
     Y = Y.sort_values(y_id_cols)
     Y.set_index(y_id_cols, inplace=True)
 
-    print 'Shape of Y : ', Y.shape
+    print('Shape of Y : ', Y.shape)
 
     # SAVE AS NUMPY ARRAYS AND TEXT FILES
     #np_Y = Y.as_matrix()
@@ -695,7 +700,7 @@ if __name__ == '__main__':
     # Parse args
     args = vars(ap.parse_args())
     for key in sorted(args.keys()):
-        print key, args[key]
+        print(key, args[key])
 
     if not isdir(args['resource_path']):
         raise ValueError("Invalid resource_path: %s" % args['resource_path'])
@@ -710,7 +715,7 @@ if __name__ == '__main__':
         os.path.join(args['resource_path'], 'outcome_data_spec.json'))
 
     if not isdir(args['out_path']):
-        print 'ERROR: OUTPATH %s DOES NOT EXIST' % args['out_path']
+        print('ERROR: OUTPATH %s DOES NOT EXIST' % args['out_path'])
         sys.exit()
     else:
         outPath = args['out_path']
@@ -743,7 +748,7 @@ if __name__ == '__main__':
 
     data = None
     if (args['extract_pop'] == 0 | (args['extract_pop'] == 1) ) & isfile(os.path.join(outPath, static_filename)):
-        data = DataFrame.from_csv(os.path.join(outPath, static_filename))
+        data = pd.read_csv(os.path.join(outPath, static_filename))
         data = sanitize_df(data, static_data_schema)
 
         """
@@ -781,10 +786,20 @@ if __name__ == '__main__':
             i.hospital_expire_flag,
             i.hospstay_seq, i.los_icu,
             i.admittime, i.dischtime,
-            i.intime, i.outtime
+            i.intime, i.outtime,
+            COALESCE(f.readmission_30, 0) AS readmission_30
           FROM icustay_detail i
           INNER JOIN admissions a ON i.hadm_id = a.hadm_id
           INNER JOIN icustays s ON i.icustay_id = s.icustay_id
+          LEFT OUTER JOIN (SELECT d.icustay_id, 1 as readmission_30
+              FROM icustays c, icustays d
+              WHERE c.subject_id=d.subject_id
+              AND c.icustay_id > d.icustay_id
+              AND c.intime - d.outtime <= interval '30 days'
+              AND c.outtime = (SELECT MIN(e.outtime) from icustays e 
+                                WHERE e.subject_id=c.subject_id
+                                AND e.intime>d.outtime)) f
+              ON i.icustay_id=f.icustay_id
           WHERE s.first_careunit NOT like 'NICU'
           and i.hadm_id is not null and i.icustay_id is not null
           and i.hospstay_seq = 1
@@ -799,6 +814,7 @@ if __name__ == '__main__':
           """.format(limit=pop_size_string, min_age=min_age_string, min_dur=min_dur_string, 
                      max_dur=max_dur_string, min_day=min_day_string)
 
+        
         data_df = pd.read_sql_query(query, con)
         cur.close()
         con.close()
@@ -806,8 +822,8 @@ if __name__ == '__main__':
         data_df = sanitize_df(data_df, static_data_schema)
         data = save_pop(data_df, outPath, static_filename, args['pop_size'], static_data_schema)
 
-    if data is None: print 'SKIPPED static_data'
-    else:            print "loaded static_data"
+    if data is None: print('SKIPPED static_data')
+    else:            print("loaded static_data")
 
     #############
     # If there is numerics extraction
@@ -815,7 +831,7 @@ if __name__ == '__main__':
     if (args['extract_numerics'] == 0 | (args['extract_numerics'] == 1) ) & isfile(os.path.join(outPath, dynamic_hd5_filename)):
         X = pd.read_hdf(os.path.join(outPath, dynamic_hd5_filename))
     elif (args['extract_numerics'] == 1 & (not isfile(os.path.join(outPath, dynamic_hd5_filename)))) | (args['extract_numerics'] == 2):
-        print "Extracting vitals data..."
+        print("Extracting vitals data...")
         start_time = time.time()
 
         ########
@@ -837,7 +853,7 @@ if __name__ == '__main__':
         con = psycopg2.connect(**query_args)
         cur = con.cursor()
 
-        print "  starting db query with %d subjects..." % (len(icuids_to_keep))
+        print("  starting db query with %d subjects..." % (len(icuids_to_keep)))
         cur.execute('SET search_path to ' + schema_name)
         query = \
         """
@@ -876,15 +892,15 @@ if __name__ == '__main__':
 
         cur.close()
         con.close()
-        print "  db query finished after %.3f sec" % (time.time() - start_time)
+        print("  db query finished after %.3f sec" % (time.time() - start_time))
         X = save_numerics(
             data, X, I, var_map, var_ranges, outPath, dynamic_filename, columns_filename, subjects_filename,
             times_filename, dynamic_hd5_filename, group_by_level2=args['group_by_level2'], apply_var_limit=args['var_limits'],
             min_percent=args['min_percent']
         )
 
-    if X is None: print "SKIPPED vitals_hourly_data"
-    else:         print "LOADED vitals_hourly_data"
+    if X is None: print("SKIPPED vitals_hourly_data")
+    else:         print("LOADED vitals_hourly_data")
 
     #############
     # If there is codes extraction
@@ -917,8 +933,8 @@ if __name__ == '__main__':
 
         C = save_icd9_codes(data, codes, outPath, codes_filename, codes_hd5_filename)
 
-    if C is None: print "SKIPPED codes_data"
-    else:         print "LOADED codes_data"
+    if C is None: print("SKIPPED codes_data")
+    else:         print("LOADED codes_data")
 
     #############
     # If there is outcome extraction
@@ -965,14 +981,14 @@ if __name__ == '__main__':
     data.columns = map(lambda x: str(x).lower(), data.columns)
     static_names = list(data.columns.values[3:])
 
-    print 'Shape of X : ', X.shape
-    print 'Shape of Y : ', Y.shape
-    print 'Shape of C : ', C.shape
-    print 'Shape of static : ', data.shape
-    print 'Variable names : ', ",".join(var_names)
-    print 'Output names : ', ",".join(out_names)
-    print 'Ic_dfD9 names : ', ",".join(icd_names)
-    print 'Static data : ', ",".join(static_names)
+    print('Shape of X : ', X.shape)
+    print('Shape of Y : ', Y.shape)
+    print('Shape of C : ', C.shape)
+    print('Shape of static : ', data.shape)
+    print('Variable names : ', ",".join(var_names))
+    print('Output names : ', ",".join(out_names))
+    print('Ic_dfD9 names : ', ",".join(icd_names))
+    print('Static data : ', ",".join(static_names))
 
     X.to_hdf(os.path.join(outPath, dynamic_hd5_filt_filename), 'vitals_labs')
     Y.to_hdf(os.path.join(outPath, dynamic_hd5_filt_filename), 'interventions')
@@ -1000,22 +1016,22 @@ if __name__ == '__main__':
     #############
     # Print the total proportions!
     rows, vars = X.shape
-    print ''
+    print('')
     for l, vals in X.iteritems():
         ratio = 1.0 * vals.dropna().count() / rows
-        print str(l) + ': ' + str(round(ratio, 3)*100) + '% present'
+        print(str(l) + ': ' + str(round(ratio, 3)*100) + '% present')
 
     #############
     # Print the per subject proportions!
     df = X.groupby(['subject_id']).count()
     for k in [1, 2, 3]:
-        print '% of subjects had at least ' + str(k) + ' present'
+        print('% of subjects had at least ' + str(k) + ' present')
         d = df > k
         d = d.sum(axis=0)
         d = d / len(df)
         d = d.reset_index()
         for index, row in d.iterrows():
-            print str(index) + ': ' + str(round(row[0], 3)*100) + '%'
-        print '\n'
+            print(str(index) + ': ' + str(round(row[0], 3)*100) + '%')
+        print('\n')
 
-    print 'Done!'
+    print('Done!')

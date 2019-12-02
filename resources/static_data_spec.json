@@ -157,6 +157,12 @@
             "type": "integer",
             "description": "TODO ???",
             "pandas_dtype": "category"
+          },
+          {
+            "name": "readmission_30",
+            "type": "integer",
+            "description": "Indicates if a patient was readmitted after this icu stay. 1 if readmitted within 30 days, 0 otherwise.",
+            "pandas_dtype": "category"
           }
         ],
       "missingValues": "nan",
